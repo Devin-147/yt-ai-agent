@@ -1,87 +1,50 @@
 <!DOCTYPE html>
-<html lang="en" data-theme="dark">
+<html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>YT AI Agent</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <style>
-    pre { white-space: pre-wrap; word-wrap: break-word; }
-  </style>
 </head>
-<body class="bg-gray-900 text-white min-h-screen p-6">
-
-  <div class="max-w-5xl mx-auto">
-    <header class="text-center mb-10">
-      <h1 class="text-5xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
-        YT AI Agent
-      </h1>
-      <p class="text-xl text-gray-300 mt-3">Paste YouTube links → get a perfect script instantly</p>
-    </header>
-
-    <div class="bg-gray-800 rounded-xl shadow-2xl p-8 mb-10">
-      <label class="block text-lg mb-3">YouTube URLs (one per line, max 10)</label>
-      <textarea
-        id="urls"
-        rows="6"
-        class="w-full p-4 bg-gray-950 rounded-lg focus:ring-4 focus:ring-purple-600 outline-none"
-        placeholder="https://www.youtube.com/watch?v=ca0uLyRTrQ0"
-      ></textarea>
-
-      <button
-        onclick="generate()"
-        class="mt-6 px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-lg font-bold text-lg hover:from-purple-700 hover:to-pink-700 transition shadow-lg"
-      >
-        Generate Script
-      </button>
-    </div>
-
-    <div id="output" class="mt-8"></div>
+<body class="bg-black text-white min-h-screen flex items-center justify-center p-4">
+  <div class="w-full max-w-3xl">
+    <h1 class="text-5xl font-bold text-center bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent mb-8">
+      YT AI Agent
+    </h1>
+    <textarea id="urls" rows="8" class="w-full p-6 text-lg bg-gray-900 rounded-xl focus:outline-none focus:ring-4 focus:ring-purple-600"
+      placeholder="Paste YouTube URLs, one per line (max 10)"></textarea>
+    <button onclick="go()" class="mt-6 w-full py-5 text-xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl hover:from-purple-700 hover:to-pink-700">
+      Generate Script
+    </button>
+    <div id="out" class="mt-10 text-lg"></div>
   </div>
 
   <script>
-    async function generate() {
-      const textarea = document.getElementById('urls');
-      const output = document.getElementById('output');
-      const button = document.querySelector('button');
+    async function go() {
+      const urls = document.getElementById('urls').value.trim().split('\n').filter(x => x.trim());
+      const out = document.getElementById('out');
+      const btn = document.querySelector('button');
+      if (!urls.length) return out.innerHTML = "<p class='text-red-500'>Paste at least one URL</p>";
 
-      const urlList = textarea.value.trim().split('\n').map(l => l.trim()).filter(Boolean);
-
-      if (urlList.length === 0) {
-        output.innerHTML = '<p class="text-red-400 text-xl">Please paste at least one YouTube link</p>';
-        return;
-      }
-
-      output.innerHTML = '<p class="text-xl">Working — this can take 15–60 seconds...</p>';
-      button.disabled = true;
-      button.textContent = "Working...";
+      out.innerHTML = "<p>Working… (15–60 sec)</p>";
+      btn.disabled = true;
 
       try {
-        const response = await fetch('/api', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ urls: urlList })
+        const res = await fetch("/api", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ urls })
         });
-
-        const data = await response.json();
-
-        if (data.success) {
-          output.innerHTML = `
-            <div class="bg-gray-800 p-8 rounded-xl shadow-xl">
-              <h2 class="text-3xl font-bold text-purple-400 mb-6">Your Script Is Ready!</h2>
-              <pre class="text-lg leading-relaxed">${data.finalScript}</pre>
-              <p class="mt-6 text-gray-400">Processed ${data.inputVideos} video(s)</p>
-            </div>
-          `;
+        const json = await res.json();
+        if (json.success) {
+          out.innerHTML = `<pre class="bg-gray-900 p-8 rounded-xl overflow-x-auto">${json.finalScript}</pre>`;
         } else {
-          output.innerHTML = `<p class="text-red-400 text-xl">Error: ${data.error}</p>`;
+          out.innerHTML = `<p class="text-red-500">Error: ${json.error}</p>`;
         }
       } catch (e) {
-        output.innerHTML = `<p class="text-red-400 text-xl">Network error: ${e.message}</p>`;
-      } finally {
-        button.disabled = false;
-        button.textContent = "Generate Script";
+        out.innerHTML = `<p class="text-red-500">Network error: ${e.message}</p>`;
       }
+      btn.disabled = false;
     }
   </script>
 </body>
