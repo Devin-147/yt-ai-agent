@@ -5,8 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>YT AI Agent</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <style>
     pre { white-space: pre-wrap; word-wrap: break-word; }
   </style>
@@ -18,7 +16,7 @@
       <h1 class="text-5xl font-bold bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
         YT AI Agent
       </h1>
-      <p class="text-xl text-gray-300 mt-3">Paste YouTube links → get a perfect script in seconds</p>
+      <p class="text-xl text-gray-300 mt-3">Paste YouTube links → get a perfect script instantly</p>
     </header>
 
     <div class="bg-gray-800 rounded-xl shadow-2xl p-8 mb-10">
@@ -26,7 +24,7 @@
       <textarea
         id="urls"
         rows="6"
-        class="w-full p-4 bg-gray-900 rounded-lg focus:ring-4 focus:ring-purple-600 outline-none"
+        class="w-full p-4 bg-gray-950 rounded-lg focus:ring-4 focus:ring-purple-600 outline-none"
         placeholder="https://www.youtube.com/watch?v=ca0uLyRTrQ0"
       ></textarea>
 
@@ -47,12 +45,10 @@
       const output = document.getElementById('output');
       const button = document.querySelector('button');
 
-      const urlList = textarea.value.trim();
-      const urlList = url.split('\n').map(l => l.trim()).filter(Boolean);
+      const urlList = textarea.value.trim().split('\n').map(l => l.trim()).filter(Boolean);
 
       if (urlList.length === 0) {
         output.innerHTML = '<p class="text-red-400 text-xl">Please paste at least one YouTube link</p>';
-        return;
         return;
       }
 
@@ -72,9 +68,9 @@
         if (data.success) {
           output.innerHTML = `
             <div class="bg-gray-800 p-8 rounded-xl shadow-xl">
-              <h2 class="text-3xl font-bold text-purple-400 mb-6">Your Perfect Script Is Ready!</h2>
+              <h2 class="text-3xl font-bold text-purple-400 mb-6">Your Script Is Ready!</h2>
               <pre class="text-lg leading-relaxed">${data.finalScript}</pre>
-              <p class="mt-6 text-gray-400">Processed ${data.inputVideos} video(s) • ${data.rawLength.toLocaleString()} characters of transcript</p>
+              <p class="mt-6 text-gray-400">Processed ${data.inputVideos} video(s)</p>
             </div>
           `;
         } else {
