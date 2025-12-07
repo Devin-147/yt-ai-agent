@@ -12,15 +12,12 @@ async function getTranscript(videoId: string): Promise<string> {
     const res = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0 (compatible; TranscriptBot/1.0)" },
     });
-    if (!res.ok) {
-      console.error(`Transcript fetch failed for ${videoId}: ${res.status}`);
-      throw new Error(`API error ${res.status}`);
-    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     return data.map((item: any) => item.text).join(" ").replace(/\s+/g, " ").trim();
   } catch (e) {
-    console.error(`Full transcript error for ${videoId}:`, e);
-    return `[Transcript failed for ${videoId}: ${e.message}]`;
+    console.error(`Transcript error ${videoId}:`, e);
+    return `[No transcript available for ${videoId}]`;
   }
 }
 
@@ -34,37 +31,37 @@ async function rewriteScript(transcriptText: string): Promise<string> {
   const apiKey = Deno.env.get("LLM_API_KEY");
   const provider = Deno.env.get("LLM_PROVIDER") || "groq";
 
-  if (!apiKey) {
-    console.warn("No LLM_API_KEY found—falling back to free HuggingFace GPT-2");
+  // ——— NO API KEY → FREE FALLBACK ———
+  if (!apiKey || apiKey.trim() === "") {
+    console.warn("No LLM key → using free HuggingFace fallback");
     try {
-      // Free fallback: HuggingFace inference API (no key needed, public endpoint)
-      const hfRes = await fetch("https://api-inference.huggingface.co/models/gpt2", {
+      const res = await fetch("https://api-inference.huggingface.co/models/gpt2", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          inputs: `Rewrite this transcript into a clean YouTube script: ${transcriptText.slice(0, 500)}...`,
-          parameters: { max_new_tokens: 500, temperature: 0.7 },
+          inputs: `Rewrite this YouTube transcript into a clean script:\n${transcriptText.slice(0, 800)}`,
+          parameters: { max_new_tokens: 600 },
         }),
       });
-      if (hfRes.ok) {
-        const hfData = await hfRes.json();
-        return Array.isArray(hfData) ? hfData[0].generated_text : "Fallback script: [Summary of key points from transcript].";
-      } else {
-        console.error("HuggingFace fallback failed:", hfRes.status);
-        return `Fallback script (no AI): ${transcriptText.slice(0, 1000)}...`;
+      if (res.ok) {
+        const data = await res.json();
+        return Array.isArray(data) ? data[0].generated_text : "Free fallback script generated.";
       }
     } catch (e) {
-      console.error("Fallback error:", e);
-      return `Error in fallback: ${e.message}. Raw transcript: ${transcriptText.slice(0, 500)}...`;
+      console.error("HuggingFace fallback failed:", e);
     }
+    return `No AI key → raw transcript (first 1500 chars):\n\n${transcriptText.slice(0, 1500)}...`;
   }
 
-  // Primary: Groq/OpenAI
-  let url = provider === "groq" ? "https://api.groq.com/openai/v1/chat/completions" : "https://api.openai.com/v1/chat/completions";
-  let model = provider === "groq" ? "llama-3.1-70b-versatile" : "gpt-4o-mini";
+  // ——— GROQ / OPENAI ———
+  const baseUrl = provider === "groq"
+    ? "https://api.groq.com/openai/v1"
+    : "https://api.openai.com/v1";
+
+  const model = provider === "groq" ? "llama-3.1-70b-versatile" : "gpt-4o-mini";
 
   try {
-    const res = await fetch(url, {
+    const res = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
@@ -73,90 +70,117 @@ async function rewriteScript(transcriptText: string): Promise<string> {
       body: JSON.stringify({
         model,
         temperature: 0.7,
-        max_tokens: 2000,
+        max_tokens: 3000,
         messages: [
           {
             role: "system",
-            content: "You are an expert YouTube script writer. Turn raw transcripts into one engaging, natural-sounding video script. Remove fillers ('um', 'like'), fix grammar, organize logically with sections/transitions. Keep all key facts/insights. Sound like a confident presenter."
+            content: "You are an expert YouTube script writer. Turn raw transcripts into one clean, engaging, natural-sounding script. Remove all filler words, fix grammar, add smooth transitions and sections. Keep every important fact and insight."
           },
           {
             role: "user",
             content: transcriptText.length > 100000
-              ? "Long transcript—summarize core message + create 5-8 min script from key parts:\n\n" + transcriptText.slice(0, 100000)
-              : `Rewrite into polished script:\n\n${transcriptText}`
+              ? "Long transcript — give me the core message + a tight 6-minute script:\n\n" + transcriptText.slice(0, 100000)
+              : "Rewrite this into a polished YouTube script:\n\n" + transcriptText
           }
         ],
       }),
     });
 
-    console.log(`LLM response status: ${res.status} for provider ${provider}`);
-
     if (!res.ok) {
-      const errText = await res.text();
-      console.error("LLM error:", res.status, errText);
-      throw new Error(`LLM failed: ${res.status} - ${errText.slice(0, 200)}`);
+      const err = await res.text();
+      throw new Error(`${res.status}: ${err.slice(0, 200)}`);
     }
 
     const data = await res.json();
-    if (!data.choices || !data.choices[0]?.message?.content) {
-      throw new Error("Invalid LLM response structure");
-    }
-
-    return data.choices[0].message.content;
+    return data.choices[0]?.message?.content || "No content returned";
   } catch (e) {
-    console.error("Full LLM error:", e);
-    return `AI rewrite failed: ${e.message}. Raw transcript preview: ${transcriptText.slice(0, 500)}...`;
+    console.error("LLM failed:", e);
+    return `AI failed (${e.message}). Raw transcript preview:\n${transcriptText.slice(0, 800)}...`;
   }
 }
 
+// ——————————————————————— MAIN SERVER ———————————————————————
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response(null, { headers: corsHeaders });
+  }
+
+  // ——— ROBUST WAY TO GET URLs (never crashes) ———
+  let urls: string[] = [];
 
   try {
-    const { urls } = await req.json();
-    console.log("Received URLs:", urls);
-
-    if (!Array.isArray(urls) || urls.length === 0 || urls.length > 10) {
-      throw new Error("Send 1–10 YouTube URLs in an array");
+    const contentType = req.headers.get("content-type") || "";
+    if (contentType.includes("application/json")) {
+      const payload = await req.json().catch(() => ({}));
+      urls = Array.isArray(payload.urls) ? payload.urls.map(String) : [];
     }
+  } catch {
+    // ignore
+  }
 
-    const videoIds = urls.map(u => extractVideoId(u.trim())).filter(Boolean) as string[];
-    console.log("Extracted IDs:", videoIds);
+  // Fallback 1: plain text body (your textarea sends this)
+  if (urls.length === 0) {
+    try {
+      const text = await req.text();
+      if (text.trim()) {
+        urls = text.trim().split("\n").map(s => s.trim()).filter(Boolean);
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // Fallback 2: query string ?urls=http://...
+  if (urls.length === 0) {
+    const q = new URL(req.url).searchParams.get("urls");
+    if (q) urls = q.split(",").map(decodeURIComponent);
+  }
+
+  if (urls.length === 0) {
+    return new Response(
+      JSON.stringify({ success: false, error: "No YouTube URLs received" }),
+      { status: 400, headers: corsHeaders }
+    );
+  }
+
+  if (urls.length > 10) urls = urls.slice(0, 10);
+
+  console.log("Processing URLs:", urls);
+
+  try {
+    const videoIds = urls
+      .map(u => extractVideoId(u))
+      .filter((id): id is string => id !== null);
 
     if (videoIds.length === 0) {
-      throw new Error("No valid YouTube URLs found");
+      throw new Error("No valid YouTube video IDs found");
     }
 
-    const transcripts = await Promise.all(
+    const segments = await Promise.all(
       videoIds.map(async (id, i) => {
         const text = await getTranscript(id);
         return `=== Video ${i + 1} — https://youtu.be/${id} ===\n${text}\n\n`;
       })
     );
 
-    const fullTranscript = transcripts.join("");
-    console.log(`Combined transcript length: ${fullTranscript.length}`);
-
-    const rewritten = await rewriteScript(fullTranscript);
-    console.log("Rewrite complete, length:", rewritten.length);
+    const fullTranscript = segments.join("");
+    const finalScript = await rewriteScript(fullTranscript);
 
     return new Response(
       JSON.stringify({
         success: true,
         inputVideos: videoIds.length,
-        finalScript: rewritten,
-        rawTranscriptsLength: fullTranscript.length,
-        transcripts,  // Bonus: Return raw for debugging
+        finalScript,
+        rawLength: fullTranscript.length,
       }),
       { headers: corsHeaders }
     );
-
-  } catch (error) {
-    console.error("Global error:", error);
+  } catch (error: any) {
+    console.error("Fatal error:", error);
     return new Response(
       JSON.stringify({
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: error.message || "Unknown server error",
       }),
       { status: 500, headers: corsHeaders }
     );
