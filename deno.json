@@ -1,6 +1,6 @@
 {
   "tasks": {
-    "start": "deno run -A index.ts"
+    "start": "deno run -A --allow-net index.ts"
   },
   "fmt": {
     "files": {
