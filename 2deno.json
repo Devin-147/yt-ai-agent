@@ -1,0 +1,10 @@
+{
+  "tasks": {
+    "start": "deno run -A index.ts"
+  },
+  "fmt": {
+    "files": {
+      "include": ["index.ts"]
+    }
+  }
+}
