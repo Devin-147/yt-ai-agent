@@ -1,13 +1,6 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-  "Content-Type": "text/html; charset=utf-8",
-};
-
-const HTML = `
-<!DOCTYPE html>
+const HTML = `<!DOCTYPE html>
 <html lang="en" class="dark">
 <head>
   <meta charset="UTF-8">
@@ -20,26 +13,22 @@ const HTML = `
     <h1 class="text-6xl font-black text-center bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">
       YT AI Agent
     </h1>
-    <textarea id="urls" rows="10" class="w-full p-6 text-lg bg-gray-900 rounded-2xl focus:outline-none focus:ring-4 focus:ring-purple-600"
-      placeholder="Paste YouTube URLs — one per line (max 10)"></textarea>
-    <button onclick="run()" class="w-full py-6 text-2xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl hover:from-purple-700 hover:to-pink-700">
+    <textarea id="urls" rows="10" class="w-full p-6 text-lg bg-gray-900 rounded-2xl focus:ring-4 focus:ring-purple-600"
+      placeholder="Paste YouTube URLs — one per line"></textarea>
+    <button onclick="go()" class="w-full py-6 text-2xl font-bold bg-gradient-to-r from-purple-600 to-pink-600 rounded-2xl">
       Generate Script
     </button>
-    <pre id="result" class="hidden mt-8 p-8 bg-gray-900 rounded-2xl text-lg leading-relaxed overflow-x-auto"></pre>
+    <pre id="out" class="hidden mt-8 p-8 bg-gray-900 rounded-2xl text-lg leading-relaxed"></pre>
   </div>
 
   <script>
-    async function run() {
-      const urls = document.getElementById('urls').value.trim().split('\\n').filter(Boolean);
-      const result = document.getElementById('result');
-      result.classList.add('hidden');
-      result.textContent = 'Working…';
+    async function go() {
+      const urls = document.getElementById('urls').value.trim().split('\n').filter(Boolean);
+      const out = document.getElementById('out');
+      out.classList.add('hidden');
+      out.textContent = 'Working… (20–40 sec)';
 
-      if (urls.length === 0) {
-        result.textContent = 'Please paste at least one URL';
-        result.classList.remove('hidden');
-        return;
-      }
+      if (urls.length === 0) return out.textContent = 'Paste at least one URL', out.classList.remove('hidden');
 
       try {
         const res = await fetch("/api", {
@@ -48,131 +37,67 @@ const HTML = `
           body: JSON.stringify({ urls })
         });
         const data = await res.json();
-
-        if (data.success) {
-          result.textContent = data.finalScript;
-        } else {
-          result.textContent = \`Error: \${data.error}\`;
-        }
+        out.textContent = data.success ? data.finalScript : 'Error: ' + data.error;
       } catch (e) {
-        result.textContent = \`Network error: \${e.message}\`;
+        out.textContent = 'Network error: ' + e.message;
       }
-      result.classList.remove('hidden');
+      out.classList.remove('hidden');
     }
   </script>
 </body>
-</html>
-`;
+</html>`;
 
-async function getTranscript(videoId: string): Promise<string> {
+async function getTranscript(id: string) {
   try {
-    const url = `https://youtube-transcript-api.deno.dev/?video_id=${videoId}&lang=en`;
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; TranscriptBot/1.0)" },
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    return data.map((item: any) => item.text).join(" ").replace(/\s+/g, " ").trim();
-  } catch (e) {
-    console.error(`Transcript error ${videoId}:`, e);
-    return `[No transcript available for ${videoId}]`;
-  }
+    const r = await fetch(`https://youtube-transcript-api.deno.dev/?video_id=${id}&lang=en`);
+    if (!r.ok) throw 0;
+    const d = await r.json();
+    return d.map((i: any) => i.text).join(" ").replace(/\s+/g, " ");
+  } catch { return "[no transcript]"; }
 }
 
-function extractVideoId(url: string): string | null {
-  const regex = /(?:youtube\.com\/.*v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/;
-  const match = url.match(regex);
-  return match ? match[1] : (url.length === 11 ? url : null);
+function getId(u: string) {
+  const m = u.match(/(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/);
+  return m ? m[1] : u.length === 11 ? u : null;
 }
 
-async function rewriteScript(transcriptText: string): Promise<string> {
-  const apiKey = Deno.env.get("LLM_API_KEY");
-  const provider = Deno.env.get("LLM_PROVIDER") || "groq";
-
-  if (!apiKey) {
-    return `No API key set — add LLM_API_KEY in Deno Deploy env vars. Raw transcript preview:\n${transcriptText.slice(0, 1000)}...`;
-  }
-
-  const baseUrl = provider === "groq" ? "https://api.groq.com/openai/v1" : "https://api.openai.com/v1";
-  const model = provider === "groq" ? "llama-3.1-70b-versatile" : "gpt-4o-mini";
-
-  try {
-    const res = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model,
-        temperature: 0.7,
-        max_tokens: 3000,
-        messages: [
-          { role: "system", content: "You are an expert YouTube script writer. Turn raw transcripts into one clean, engaging script. Remove fillers, add transitions, keep key facts." },
-          { role: "user", content: `Rewrite this into a polished YouTube script:\n\n${transcriptText}` }
-        ],
-      }),
-    });
-
-    if (!res.ok) {
-      const err = await res.text();
-      throw new Error(`${res.status}: ${err.slice(0, 200)}`);
-    }
-
-    const data = await res.json();
-    return data.choices[0]?.message?.content || "No content returned";
-  } catch (e) {
-    console.error("LLM failed:", e);
-    return `AI error: ${e.message}. Transcript preview:\n${transcriptText.slice(0, 800)}...`;
-  }
+async function rewrite(t: string) {
+  const key = Deno.env.get("LLM_API_KEY");
+  if (!key) return "No LLM_API_KEY set in Deno Deploy";
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: "llama-3.1-70b-versatile",
+      temperature: 0.7,
+      messages: [{ role: "user", content: "Rewrite this YouTube transcript into a clean script:\n\n" + t }]
+    })
+  });
+  const d = await res.json();
+  return d.choices?.[0]?.message?.content || "No response";
 }
 
 serve(async (req) => {
-  const url = new URL(req.url);
-  const pathname = url.pathname;
+  const p = new URL(req.url).pathname;
+  if (p === "/") return new Response(HTML, { headers: { "Content-Type": "text/html" } });
+  if (p !== "/api" || req.method !== "POST") return new Response("404", { status: 404 });
 
-  if (pathname === "/") {
-    return new Response(HTML, { headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" } });
+  let urls: string[] = [];
+  try {
+    const body = await req.json();
+    urls = Array.isArray(body.urls) ? body.urls : [];
+  } catch {
+    const text = await req.text();
+    urls = text.trim().split("\n").filter(Boolean);
   }
 
-  if (req.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
+  if (urls.length === 0) return new Response(JSON.stringify({ success: false, error: "No URLs" }), { status: 400 });
 
-  if (pathname === "/api") {
-    let urls: string[] = [];
-    try {
-      const contentType = req.headers.get("content-type") || "";
-      if (contentType.includes("application/json")) {
-        const payload = await req.json().catch(() => ({}));
-        urls = Array.isArray(payload.urls) ? payload.urls : [];
-      } else {
-        const text = await req.text();
-        urls = text.trim().split("\n").filter(Boolean);
-      }
-    } catch (e) {
-      console.warn("Body parse error:", e);
-    }
+  const ids = urls.map(getId).filter(Boolean) as string[];
+  const parts = await Promise.all(ids.map(async (id, i) => `Video ${i+1}: https://youtu.be/${id}\n${await getTranscript(id)}\n`));
+  const script = await rewrite(parts.join("\n"));
 
-    if (urls.length === 0) {
-      return new Response(JSON.stringify({ success: false, error: "No YouTube URLs received" }), { status: 400, headers: corsHeaders });
-    }
-
-    try {
-      const videoIds = urls.map(extractVideoId).filter((id): id is string => id !== null);
-      if (videoIds.length === 0) throw new Error("No valid video IDs");
-
-      const segments = await Promise.all(videoIds.map(async (id, i) => {
-        const text = await getTranscript(id);
-        return `Video ${i + 1}: https://youtu.be/${id}\n${text}\n`;
-      }));
-
-      const fullTranscript = segments.join("\n");
-      const finalScript = await rewriteScript(fullTranscript);
-
-      return new Response(JSON.stringify({ success: true, inputVideos: videoIds.length, finalScript }), { headers: corsHeaders });
-    } catch (error) {
-      console.error("API error:", error);
-      return new Response(JSON.stringify({ success: false, error: error.message }), { status: 500, headers: corsHeaders });
-    }
-  }
-
-  return new Response("Not found", { status: 404, headers: corsHeaders });
+  return new Response(JSON.stringify({ success: true, finalScript: script }), {
+    headers: { "Content-Type": "application/json" }
+  });
 });
