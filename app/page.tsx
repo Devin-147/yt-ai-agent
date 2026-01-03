@@ -48,7 +48,7 @@ export default function Home() {
         setResult(data.script);
       }
     } catch (err) {
-      setError('Network error — check your connection');
+      setError('Network error — please check your connection');
     }
 
     setLoading(false);
