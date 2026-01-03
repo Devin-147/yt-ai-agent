@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
           content: `Rewrite this combined YouTube transcript into a clean, engaging, original script for a new video. Make it concise and professional:\n\n${combined}` 
         }
       ],
-      model: 'llama3-8b-8192',
+      model: 'llama-3.1-8b-instant',
       max_tokens: 4000,
       temperature: 0.7
     });
