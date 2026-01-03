@@ -1,61 +1,34 @@
 import { NextRequest } from 'next/server';
+import { YoutubeTranscript } from 'youtube-transcript';
 import { Groq } from 'groq-sdk';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const YT_TOKEN = process.env.TRANSCRIPT_TOKEN;  // Updated to match your new env var key
 
 export async function POST(req: NextRequest) {
   try {
     const { urls } = await req.json();
-    if (!urls?.length) {
-      return Response.json({ error: 'No URLs provided' });
-    }
+    if (!urls?.length) return Response.json({ error: 'No URLs provided' });
 
-    if (!YT_TOKEN) {
-      return Response.json({ error: 'Missing transcript API token' });
-    }
-
-    // Extract video IDs from URLs
-    const ids = urls.map((url: string) => {
-      const match = url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([^?&"\'>]+)/);
-      return match ? match[1] : null;
-    }).filter(Boolean);
-
-    if (ids.length === 0) {
-      return Response.json({ error: 'No valid YouTube video IDs found' });
-    }
-
-    // Call youtube-transcript.io bulk endpoint
-    const res = await fetch('https://www.youtube-transcript.io/api/transcripts', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Basic ${YT_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ ids })
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      return Response.json({ error: `Transcript API failed: ${res.status} – ${text}` });
-    }
-
-    const data = await res.json();
-
-    // Combine transcripts with source URLs
     let combined = '';
-    ids.forEach((id: string, i: number) => {
-      const transcript = data[id]?.text || data[id]?.transcript || '[no transcript available]';
-      const originalUrl = urls.find((u: string) => u.includes(id)) || `https://youtube.com/watch?v=${id}`;
-      combined += `\n\n--- ${originalUrl} ---\n${transcript}`;
-    });
+    for (const url of urls) {
+      try {
+        const transcript = await YoutubeTranscript.fetchTranscript(url);
+        const text = transcript.map((t: any) => t.text).join(' ');
+        combined += `\n\n--- ${url} ---\n${text}`;
+      } catch (err) {
+        combined += `\n\n--- ${url} ---\n[no transcript available]`;
+      }
+    }
 
-    // Rewrite with Groq
+    if (combined.trim().length < 50) {
+      return Response.json({ error: 'No transcripts found for the provided URLs. Try videos with captions enabled.' });
+    }
+
     const completion = await groq.chat.completions.create({
       messages: [
-        { 
-          role: 'user', 
-          content: `Rewrite this combined YouTube transcript into a clean, engaging, original script for a new video. Make it concise and professional:\n\n${combined}` 
+        {
+          role: 'user',
+          content: `Rewrite this combined YouTube transcript into a clean, engaging, original script for a new video. Make it concise and professional:\n\n${combined}`
         }
       ],
       model: 'llama-3.1-8b-instant',
@@ -67,7 +40,7 @@ export async function POST(req: NextRequest) {
 
     return Response.json({ script });
   } catch (err: any) {
-    return Response.json({ error: err.message || 'Unknown server error' });
+    return Response.json({ error: err.message || 'Server error' });
   }
 }
 
