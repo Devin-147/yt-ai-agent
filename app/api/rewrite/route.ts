@@ -1,35 +1,48 @@
 import { NextRequest } from 'next/server';
-import { getSubtitles } from 'youtube-caption-extractor';
 import { Groq } from 'groq-sdk';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+const YT_TOKEN = process.env.TRANSCRIPT_TOKEN;  // Your youtube-transcript.io token
 
 export async function POST(req: NextRequest) {
   try {
     const { urls } = await req.json();
     if (!urls?.length) return Response.json({ error: 'No URLs provided' });
 
-    let combined = '';
-    for (const url of urls) {
+    if (!YT_TOKEN) return Response.json({ error: 'Missing transcript API token' });
+
+    const ids = urls.map((url: string) => {
       const match = url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([^?&"\'>]+)/);
-      const videoID = match ? match[1] : null;
+      return match ? match[1] : null;
+    }).filter(Boolean);
 
-      if (!videoID) {
-        combined += `\n\n--- ${url} ---\n[invalid URL]`;
-        continue;
-      }
+    if (ids.length === 0) return Response.json({ error: 'No valid video IDs' });
 
-      try {
-        const subtitles = await getSubtitles({ videoID, lang: 'en' });
-        const text = subtitles.map((s: any) => s.text).join(' ');
-        combined += `\n\n--- ${url} ---\n${text}`;
-      } catch (err) {
-        combined += `\n\n--- ${url} ---\n[no transcript available]`;
-      }
+    const res = await fetch('https://www.youtube-transcript.io/api/transcripts', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${YT_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ ids })
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      return Response.json({ error: `Transcript API error: ${res.status} - ${text}` });
     }
 
+    const data = await res.json();
+
+    let combined = '';
+    ids.forEach((id: string, i: number) => {
+      const transcript = data[id]?.text || '[no transcript available]';
+      const originalUrl = urls.find((u: string) => u.includes(id)) || `https://youtube.com/watch?v=${id}`;
+      combined += `\n\n--- ${originalUrl} ---\n${transcript}`;
+    });
+
     if (combined.trim().length < 100) {
-      return Response.json({ error: 'No transcripts found for the provided URLs. These videos may lack captions.' });
+      return Response.json({ error: 'No transcripts found. Try videos with manual captions (TED Talks work well).' });
     }
 
     const completion = await groq.chat.completions.create({
