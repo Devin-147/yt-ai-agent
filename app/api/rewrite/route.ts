@@ -1,48 +1,80 @@
 import { NextRequest } from 'next/server';
 import { Groq } from 'groq-sdk';
+import { YTDlpWrap } from 'yt-dlp-wrap';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
-const YT_TOKEN = process.env.TRANSCRIPT_TOKEN;  // Your youtube-transcript.io token
+const YT_TOKEN = process.env.TRANSCRIPT_TOKEN;
 
 export async function POST(req: NextRequest) {
   try {
     const { urls } = await req.json();
     if (!urls?.length) return Response.json({ error: 'No URLs provided' });
 
-    if (!YT_TOKEN) return Response.json({ error: 'Missing transcript API token' });
+    let combined = '';
+    let usedWhisper = false;
 
-    const ids = urls.map((url: string) => {
-      const match = url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([^?&"\'>]+)/);
-      return match ? match[1] : null;
-    }).filter(Boolean);
+    // Try paid caption API first (fast if manual captions exist)
+    if (YT_TOKEN) {
+      const ids = urls.map((url: string) => {
+        const match = url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([^?&"\'>]+)/);
+        return match ? match[1] : null;
+      }).filter(Boolean);
 
-    if (ids.length === 0) return Response.json({ error: 'No valid video IDs' });
+      if (ids.length > 0) {
+        const res = await fetch('https://www.youtube-transcript.io/api/transcripts', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Basic ${YT_TOKEN}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({ ids })
+        });
 
-    const res = await fetch('https://www.youtube-transcript.io/api/transcripts', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Basic ${YT_TOKEN}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({ ids })
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      return Response.json({ error: `Transcript API error: ${res.status} - ${text}` });
+        if (res.ok) {
+          const data = await res.json();
+          ids.forEach((id: string, i: number) => {
+            const transcript = data[id]?.text || '';
+            if (transcript.trim()) {
+              const originalUrl = urls[i];
+              combined += `\n\n--- ${originalUrl} ---\n${transcript}`;
+            }
+          });
+        }
+      }
     }
 
-    const data = await res.json();
+    // Fallback to Whisper audio transcription if no captions
+    if (combined.trim().length < 100) {
+      usedWhisper = true;
+      const ytDlp = new YTDlpWrap();
 
-    let combined = '';
-    ids.forEach((id: string, i: number) => {
-      const transcript = data[id]?.text || '[no transcript available]';
-      const originalUrl = urls.find((u: string) => u.includes(id)) || `https://youtube.com/watch?v=${id}`;
-      combined += `\n\n--- ${originalUrl} ---\n${transcript}`;
-    });
+      for (const url of urls) {
+        try {
+          const videoID = url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([^?&"\'>]+)/)?.[1];
+          if (!videoID) continue;
+
+          const audioBuffer = await ytDlp.execPromise([
+            url,
+            '-f', 'bestaudio',
+            '--no-playlist',
+            '-o', '-'
+          ], { stdout: 'pipe' });
+
+          const transcription = await groq.audio.transcriptions.create({
+            file: new File([audioBuffer], 'audio'),
+            model: 'whisper-large-v3-turbo',
+            response_format: 'text'
+          });
+
+          combined += `\n\n--- ${url} ---\n${transcription.text.trim()}`;
+        } catch (err) {
+          combined += `\n\n--- ${url} ---\n[failed to transcribe audio]`;
+        }
+      }
+    }
 
     if (combined.trim().length < 100) {
-      return Response.json({ error: 'No transcripts found. Try videos with manual captions (TED Talks work well).' });
+      return Response.json({ error: 'No transcript available for these videos.' });
     }
 
     const completion = await groq.chat.completions.create({
