@@ -1,65 +1,69 @@
-import { NextRequest } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { Groq } from 'groq-sdk';
-import { YTDlpWrap } from 'yt-dlp-wrap';
+import { getSubtitles } from 'youtube-caption-extractor';
 
 const groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
 
 export async function POST(req: NextRequest) {
   try {
     const { urls } = await req.json();
-    if (!urls || !urls.length) return Response.json({ error: 'No URLs provided' });
+    if (!Array.isArray(urls) || urls.length === 0) {
+      return NextResponse.json({ error: 'Provide at least one valid YouTube URL' }, { status: 400 });
+    }
 
     let combined = '';
 
-    const ytDlp = new YTDlpWrap();
-
     for (const url of urls) {
       try {
-        // Download audio only (fast, small)
-        const audioBuffer = await ytDlp.execPromise([
-          url,
-          '-f', 'bestaudio',
-          '--no-playlist',
-          '-o', '-'
-        ], { stdout: 'pipe' });
+        // Extract video ID from various URL formats
+        const videoIDMatch = url.match(/(?:v=|youtu\.be\/|shorts\/|embed\/)([^?&"\'>]+)/);
+        const videoID = videoIDMatch ? videoIDMatch[1] : null;
 
-        // Transcribe with Groq Whisper
-        const transcription = await groq.audio.transcriptions.create({
-          file: new File([audioBuffer], 'audio.webm', { type: 'audio/webm' }),
-          model: 'whisper-large-v3-turbo',
-          response_format: 'text',
-          language: 'en'
+        if (!videoID) {
+          throw new Error('Invalid YouTube URL');
+        }
+
+        // Fetch subtitles (supports auto-generated + manual, defaults to English)
+        const subtitles = await getSubtitles({
+          videoID,
+          lang: 'en',  // Change to 'fr', 'es', etc. if needed for other languages
         });
 
-        combined += `\n\n--- ${url} ---\n${transcription.text.trim()}`;
-      } catch (err) {
-        combined += `\n\n--- ${url} ---\n[failed to transcribe audio]`;
+        if (!subtitles || subtitles.length === 0) {
+          throw new Error('No captions available (auto or manual)');
+        }
+
+        // Join all text segments into clean paragraph-style transcript
+        const text = subtitles.map(s => s.text.trim()).join(' ');
+        combined += `\n\n--- ${url} (ID: ${videoID}) ---\n${text}`;
+      } catch (err: any) {
+        console.error(`Transcript fetch failed for ${url}:`, err.message);
+        combined += `\n\n--- ${url} ---\n[Transcript unavailable - ${err.message.slice(0, 120)}]`;
       }
     }
 
-    if (combined.trim().length < 100) {
-      return Response.json({ error: 'No audio transcribed from these videos.' });
+    if (!combined.trim() || combined.split('[Transcript unavailable').length > urls.length) {
+      return NextResponse.json({ error: 'Failed to retrieve any usable transcripts.' }, { status: 400 });
     }
 
     // Rewrite with Groq
     const completion = await groq.chat.completions.create({
-      messages: [
-        {
-          role: 'user',
-          content: `Rewrite this combined YouTube transcript into a clean, engaging, original script for a new video. Make it concise and professional:\n\n${combined}`
-        }
-      ],
+      messages: [{
+        role: 'user',
+        content: `Rewrite these combined YouTube transcript(s) into a clean, engaging, professional original script for a new video. Make it concise, natural, and well-structured:\n\n${combined}`
+      }],
       model: 'llama-3.1-8b-instant',
       max_tokens: 4000,
-      temperature: 0.7
+      temperature: 0.7,
     });
 
-    const script = completion.choices[0]?.message?.content?.trim() || 'No output from AI';
+    const script = completion.choices?.[0]?.message?.content?.trim() || '[Generation failed]';
 
-    return Response.json({ script });
+    return NextResponse.json({ script });
   } catch (err: any) {
-    return Response.json({ error: err.message || 'Server error' });
+    console.error('API error:', err);
+    return NextResponse.json({ error: err.message || 'Internal error' }, { status: 500 });
   }
 }
 
-export const runtime = 'edge';
+export const runtime = 'edge';  // Works great here; switch to 'nodejs' only if issues
